@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <!-- 👇 모바일에서 화면 비율을 맞추기 위한 필수 태그 추가 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>우리들의 공유 서재</title>
+    <style>
+        body { font-family: 'Malgun Gothic', sans-serif; padding: 30px; }
+        h1 { color: #2c3e50; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: middle; }
+        th { background-color: #f2f2f2; color: #333; }
+        .available { color: blue; font-weight: bold; }
+        .borrowed { color: red; }
+
+        .input-group { 
+            margin: 20px 0; padding: 20px; background-color: #f8f9fa; 
+            border: 1px solid #ddd; border-radius: 8px;
+            display: flex; gap: 10px; align-items: flex-start;
+        }
+        .input-group input { padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 150px; }
+        .input-group button { 
+            padding: 9px 15px; cursor: pointer; background-color: #2c3e50; 
+            color: white; border: none; border-radius: 4px; font-weight: bold; white-space: nowrap; 
+        }
+        .input-group button:hover { background-color: #1a252f; }
+
+        .autocomplete-container { position: relative; }
+        .suggestion-list {
+            position: absolute; top: 100%; left: 0; width: 250px; 
+            background: white; border: 1px solid #ccc; border-top: none;
+            list-style: none; padding: 0; margin: 0; max-height: 200px;
+            overflow-y: auto; display: none; z-index: 10;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .suggestion-list li { padding: 10px; cursor: pointer; border-bottom: 1px solid #eee; font-size: 13px; }
+        .suggestion-list li:hover { background-color: #f1f2f6; }
+
+        .action-btn { padding: 5px 10px; cursor: pointer; border: none; border-radius: 4px; color: white; font-size: 13px; margin-right: 5px; }
+        .edit-btn { background-color: #f39c12; }
+        .edit-btn:hover { background-color: #e67e22; }
+        .delete-btn { background-color: #e74c3c; }
+        .delete-btn:hover { background-color: #c0392b; }
+        .save-btn { background-color: #27ae60; }
+        .save-btn:hover { background-color: #2ecc71; }
+        .edit-input { width: 90%; padding: 5px; border: 1px solid #3498db; border-radius: 3px; }
+
+        /* ========================================== */
+        /* 👇 모바일 화면을 위한 반응형 CSS 추가 */
+        /* ========================================== */
+        @media screen and (max-width: 768px) {
+            body { padding: 15px; } 
+            h1 { font-size: 24px; }
+            .input-group { 
+                flex-direction: column; 
+                align-items: stretch; 
+                padding: 15px;
+            }
+            .input-group input { width: auto; }
+            .input-group button { width: 100%; padding: 12px; margin-top: 10px; }
+            .suggestion-list { width: 100%; }
+            table { display: block; overflow-x: auto; white-space: nowrap; }
+            .action-btn { display: block; margin-bottom: 5px; width: 100%; }
+            .edit-input { width: 100px; }
+        }
+    </style>
+</head>
+<body>
+    <h1>📚 우리들의 공유 서재</h1>
+    <p>서로 어떤 책을 가지고 있는지 확인하고 빌려보세요! (실시간 동기화 중 ⚡)</p>
+
+    <!-- 총 수량 표시 -->
+    <p id="totalCount" style="font-weight: bold; color: #3498db; margin-top: -10px;">총 등록된 도서: 0권</p>
+
+    <div class="input-group">
+        <input type="text" id="bookOwner" placeholder="소유자 (예: 홍길동)">
+        
+        <div class="autocomplete-container">
+            <input type="text" id="bookTitle" placeholder="책 제목 (검색)" autocomplete="off">
+            <ul id="suggestionList" class="suggestion-list"></ul>
+        </div>
+
+        <input type="text" id="bookAuthor" placeholder="저자">
+        <button id="addBtn">책 등록하기</button>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th style="width: 60px;">번호</th>
+                <th>소유자</th>
+                <th>책 제목</th>
+                <th>저자</th>
+                <th>상태</th>
+                <th>관리</th>
+            </tr>
+        </thead>
+        <tbody id="bookTableBody">
+            <!-- Firebase 데이터가 이곳에 실시간으로 채워집니다 -->
+        </tbody>
+    </table>
+
+    <script type="module">
+        // 1. Firebase 모듈 불러오기
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, onValue, push, set, remove, update } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+        // 2. Firebase 설정값
+        const firebaseConfig = {
+            apiKey: "AIzaSyByN4CptfuwYQeJgU5wq1iIL5YnUHbP8yY",
+            authDomain: "shared-library-882cf.firebaseapp.com",
+            projectId: "shared-library-882cf",
+            storageBucket: "shared-library-882cf.firebasestorage.app",
+            messagingSenderId: "386402815384",
+            appId: "1:386402815384:web:2c337fcf9a40ee73ffefed",
+            databaseURL: "https://shared-library-882cf-default-rtdb.asia-southeast1.firebasedatabase.app" 
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+        const booksRef = ref(db, 'books'); 
+
+        const ownerInput = document.getElementById('bookOwner');
+        const titleInput = document.getElementById('bookTitle');
+        const authorInput = document.getElementById('bookAuthor');
+        const suggestionList = document.getElementById('suggestionList');
+        const addBtn = document.getElementById('addBtn');
+        const tableBody = document.getElementById('bookTableBody');
+        const totalCountEl = document.getElementById('totalCount');
+
+        // ==========================================
+        // 3. [Firebase] 데이터 실시간 불러오기 & 번호/수량 표시 (안전하게 수정됨)
+        // ==========================================
+        onValue(booksRef, (snapshot) => {
+            const data = snapshot.val();
+            tableBody.innerHTML = ''; 
+
+            if (data) {
+                const booksArray = Object.entries(data).map(([key, book]) => {
+                    return { key: key, ...book }; 
+                });
+
+                // 👇 에러 방어 코드 적용 완료
+                booksArray.sort((a, b) => {
+                    const titleA = a.title || "";
+                    const titleB = b.title || "";
+                    return titleA.localeCompare(titleB, 'ko-KR');
+                });
+
+                totalCountEl.textContent = `총 등록된 도서: ${booksArray.length}권`;
+
+                booksArray.forEach((book, index) => {
+                    const tr = document.createElement('tr');
+                    tr.dataset.key = book.key; 
+                    
+                    tr.innerHTML = `
+                        <td>${index + 1}</td>
+                        <td>${book.owner || "이름없음"}</td>
+                        <td>${book.title || "제목없음"}</td>
+                        <td>${book.author || "저자없음"}</td>
+                        <td class="${book.statusClass || 'available'}">${book.status || '대여 가능'}</td>
+                        <td>
+                            <button class="action-btn edit-btn">수정</button>
+                            <button class="action-btn delete-btn">삭제</button>
+                        </td>
+                    `;
+                    tableBody.appendChild(tr);
+                });
+            } else {
+                totalCountEl.textContent = `총 등록된 도서: 0권`;
+                tableBody.innerHTML = '<tr><td colspan="6" style="text-align:center;">등록된 책이 없습니다. 첫 번째 책을 등록해보세요!</td></tr>';
+            }
+        });
+
+        // ==========================================
+        // 4. [Firebase] 새로운 책 등록하기
+        // ==========================================
+        addBtn.addEventListener('click', () => {
+            const owner = ownerInput.value.trim();
+            const title = titleInput.value.trim();
+            const author = authorInput.value.trim();
+
+            if (owner === '' || title === '' || author === '') {
+                alert('소유자, 책 제목, 저자를 모두 입력해주세요!');
+                return;
+            }
+
+            const newBookRef = push(booksRef);
+            set(newBookRef, {
+                owner: owner,
+                title: title,
+                author: author,
+                status: '대여 가능',
+                statusClass: 'available'
+            });
+
+            ownerInput.value = '';
+            titleInput.value = '';
+            authorInput.value = '';
+            ownerInput.focus();
+        });
+
+        // ==========================================
+        // 5. [Firebase] 데이터 수정 및 삭제 기능
+        // ==========================================
+        tableBody.addEventListener('click', (e) => {
+            const target = e.target;
+            const tr = target.closest('tr');
+            if (!tr) return;
+
+            const firebaseKey = tr.dataset.key; 
+            const specificBookRef = ref(db, `books/${firebaseKey}`); 
+
+            if (target.classList.contains('delete-btn')) {
+                if (confirm('정말 이 책을 삭제하시겠습니까?')) {
+                    remove(specificBookRef); 
+                }
+            }
+            else if (target.classList.contains('edit-btn')) {
+                const tds = tr.querySelectorAll('td');
+                for (let i = 1; i <= 3; i++) {
+                    const currentText = tds[i].innerText;
+                    tds[i].innerHTML = `<input type="text" value="${currentText}" class="edit-input">`;
+                }
+                
+                const currentStatus = tds[4].innerText.trim();
+                tds[4].innerHTML = `
+                    <select class="edit-input" style="width: 100%; cursor: pointer;">
+                        <option value="대여 가능" ${currentStatus === '대여 가능' ? 'selected' : ''}>대여 가능</option>
+                        <option value="대여 중" ${currentStatus === '대여 중' ? 'selected' : ''}>대여 중</option>
+                    </select>
+                `;
+
+                target.innerText = '저장';
+                target.classList.remove('edit-btn');
+                target.classList.add('save-btn');
+            }
+            else if (target.classList.contains('save-btn')) {
+                const tds = tr.querySelectorAll('td');
+                let hasEmpty = false;
+                
+                for (let i = 1; i <= 3; i++) {
+                    if(tds[i].querySelector('input').value.trim() === '') hasEmpty = true;
+                }
+
+                if (hasEmpty) {
+                    alert('빈칸으로 저장할 수 없습니다.');
+                    return;
+                }
+
+                const newStatus = tds[4].querySelector('select').value;
+                const newStatusClass = (newStatus === '대여 가능') ? 'available' : 'borrowed';
+
+                update(specificBookRef, {
+                    owner: tds[1].querySelector('input').value.trim(),
+                    title: tds[2].querySelector('input').value.trim(),
+                    author: tds[3].querySelector('input').value.trim(),
+                    status: newStatus,
+                    statusClass: newStatusClass
+                });
+            }
+        });
+
+        // ==========================================
+        // 6. 카카오 도서 검색 API
+        // ==========================================
+        const KAKAO_API_KEY = '2a0e3d09894dfc25bf7666dfd783f49d';
+
+        async function searchBooksWithKakao(query) {
+            try {
+                const url = `https://dapi.kakao.com/v3/search/book?query=${encodeURIComponent(query)}`;
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: { 'Authorization': `KakaoAK ${KAKAO_API_KEY}` }
+                });
+                if (!response.ok) throw new Error('네트워크 에러가 발생했습니다.');
+                const data = await response.json();
+                return data.documents; 
+            } catch (error) {
+                console.error("카카오 API 검색 중 오류 발생:", error);
+                return [];
+            }
+        }
+
+        let debounceTimer;
+        titleInput.addEventListener('input', (e) => {
+            const query = e.target.value.trim();
+            clearTimeout(debounceTimer);
+            if (query.length === 0) {
+                suggestionList.innerHTML = '';
+                suggestionList.style.display = 'none';
+                return;
+            }
+            debounceTimer = setTimeout(async () => {
+                const books = await searchBooksWithKakao(query);
+                suggestionList.innerHTML = '';
+                if (books.length > 0) {
+                    suggestionList.style.display = 'block';
+                    books.forEach(book => {
+                        const li = document.createElement('li');
+                        const authorNames = book.authors.join(', ');
+                        li.textContent = `${book.title} - ${authorNames} (${book.publisher})`;
+                        li.addEventListener('click', () => {
+                            titleInput.value = book.title; 
+                            authorInput.value = authorNames;
+                            suggestionList.innerHTML = ''; 
+                            suggestionList.style.display = 'none';
+                        });
+                        suggestionList.appendChild(li);
+                    });
+                } else {
+                    suggestionList.style.display = 'none';
+                }
+            }, 500); 
+        });
+
+        document.addEventListener('click', function(e) {
+            if (e.target !== titleInput && e.target !== suggestionList) {
+                suggestionList.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>
